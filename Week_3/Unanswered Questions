@@ -1,0 +1,1 @@
+在lemma之中，都是使用tanh來逼近。如果使用其他activation function，淺層網路是否能一樣逼近多項式?
