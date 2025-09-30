@@ -1,0 +1,97 @@
+(Code is provided by dicussing with ChatGPT and run by colab)
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import pandas as pd
+
+# =============================
+# 1. 載入資料
+# =============================
+data = pd.read_csv("regression_dataset.csv")
+print("資料欄位名稱：", data.columns.tolist())
+
+# 特徵 (經度, 緯度)
+X = data.iloc[:, :2].values
+# 標籤 (溫度)
+y = data.iloc[:, 2].values
+
+# 轉成 tensor
+X = torch.tensor(X, dtype=torch.float32)
+y = torch.tensor(y, dtype=torch.float32).view(-1, 1)
+
+# =============================
+# 2. 手動拆分 train/test (8:2)
+# =============================
+num_samples = X.shape[0]
+indices = torch.randperm(num_samples)
+train_size = int(0.8 * num_samples)
+
+train_idx = indices[:train_size]
+test_idx = indices[train_size:]
+
+X_train, y_train = X[train_idx], y[train_idx]
+X_test, y_test = X[test_idx], y[test_idx]
+
+# =============================
+# 3. 定義 MLP 回歸模型
+# =============================
+class MLPRegressionModel(nn.Module):
+    def __init__(self, input_dim=2, hidden_dim=16):
+        super(MLPRegressionModel, self).__init__()
+        self.hidden = nn.Linear(input_dim, hidden_dim)
+        self.relu = nn.ReLU()
+        self.output = nn.Linear(hidden_dim, 1)
+
+    def forward(self, x):
+        x = self.hidden(x)
+        x = self.relu(x)
+        x = self.output(x)
+        return x
+
+model = MLPRegressionModel()
+
+# =============================
+# 4. 損失函數
+# =============================
+criterion = nn.MSELoss()
+
+# =============================
+# 5. 訓練函數
+# =============================
+def train_model(model, X_train, y_train, lr, epochs, print_every=20):
+    optimizer = optim.SGD(model.parameters(), lr=lr)
+    
+    for epoch in range(1, epochs+1):
+        # 前向傳播
+        y_pred = model(X_train)
+        loss = criterion(y_pred, y_train)
+
+        # 反向傳播
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # 每 print_every 次輸出 Loss
+        if epoch % print_every == 0:
+            print(f"Epoch {epoch:3d} | LR={lr} | Loss: {loss.item():.6f}")
+
+# =============================
+# 6. 第一階段訓練 (lr=0.01, 400 次)
+# =============================
+print("=== 第一階段訓練: lr=0.01, 400 epochs ===")
+train_model(model, X_train, y_train, lr=0.01, epochs=400, print_every=20)
+
+# =============================
+# 7. 第二階段訓練 (lr=0.001, 100 次)
+# =============================
+print("\n=== 第二階段訓練: lr=0.001, 100 epochs ===")
+train_model(model, X_train, y_train, lr=0.001, epochs=100, print_every=20)
+
+# =============================
+# 8. 測試集評估
+# =============================
+model.eval()
+with torch.no_grad():
+    y_test_pred = model(X_test)
+    test_loss = criterion(y_test_pred, y_test).item()
+    print(f"\n測試集 MSE: {test_loss:.6f}")
