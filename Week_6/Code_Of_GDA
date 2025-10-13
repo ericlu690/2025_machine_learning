@@ -1,0 +1,100 @@
+(The following code get by discussing with ChatGPT)
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+import os
+
+# -------- 設定 --------
+CSV_PATH = "classification_dataset.csv"   # 若路徑不同請改
+TEST_SIZE = 0.30
+RANDOM_STATE = 1
+REG = 1e-6   # 協方差正則化，避免奇異
+
+# -------- 1. 讀資料 --------
+df = pd.read_csv(CSV_PATH)
+# 預期欄位: longitude, latitude, temperature, is_valid
+X = df[["longitude", "latitude"]].values
+y = df["is_valid"].astype(int).values
+
+# -------- 2. 切分 train/test (stratify 保持比例) --------
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=TEST_SIZE, stratify=y, random_state=RANDOM_STATE
+)
+
+# -------- 3. GDA 實作 (fit/predict) --------
+def fit_gda(X, y, reg=1e-6):
+    n, d = X.shape
+    phi = y.mean()
+    mu0 = X[y == 0].mean(axis=0) if np.any(y==0) else np.zeros(d)
+    mu1 = X[y == 1].mean(axis=0) if np.any(y==1) else np.zeros(d)
+    sigma = np.zeros((d, d))
+    for i in range(n):
+        xi = X[i]
+        mu = mu1 if y[i] == 1 else mu0
+        diff = (xi - mu).reshape(d,1)
+        sigma += diff.dot(diff.T)
+    sigma /= n
+    sigma += reg * np.eye(d)
+    sigma_inv = np.linalg.pinv(sigma)
+    w = sigma_inv.dot(mu1 - mu0)
+    b = -0.5 * mu1.T.dot(sigma_inv).dot(mu1) + 0.5 * mu0.T.dot(sigma_inv).dot(mu0) + np.log((phi + 1e-12) / (1 - phi + 1e-12))
+    return {"phi":phi, "mu0":mu0, "mu1":mu1, "sigma":sigma, "sigma_inv":sigma_inv, "w":w, "b":b}
+
+def predict_proba_gda(model, X):
+    logits = X.dot(model["w"]) + model["b"]
+    probs = 1.0 / (1.0 + np.exp(-logits))
+    return probs
+
+def predict_gda(model, X, threshold=0.5):
+    return (predict_proba_gda(model, X) >= threshold).astype(int)
+
+# -------- 4. 訓練 --------
+model = fit_gda(X_train, y_train, reg=REG)
+
+# -------- 5. 評估 --------
+y_pred_test = predict_gda(model, X_test)
+acc_test = accuracy_score(y_test, y_pred_test)
+cm = confusion_matrix(y_test, y_pred_test)
+report_str = classification_report(y_test, y_pred_test)
+
+print("Test accuracy:", acc_test)
+print("Confusion matrix:\n", cm)
+print("Classification report:\n", report_str)
+
+# 將結果寫檔
+os.makedirs("/content/gda_outputs", exist_ok=True)
+with open("/content/gda_outputs/gda_results.txt", "w") as f:
+    f.write(f"Test accuracy: {acc_test}\n\n")
+    f.write("Confusion matrix (rows=true, cols=pred):\n")
+    f.write(str(cm) + "\n\n")
+    f.write("Classification report:\n")
+    f.write(report_str)
+
+# -------- 6. 決策邊界繪圖（2D） --------
+def plot_decision_boundary_2d(model, X, y, filename="/content/gda_outputs/gda_decision_boundary.png"):
+    x_min, x_max = X[:,0].min() - 0.02, X[:,0].max() + 0.02
+    y_min, y_max = X[:,1].min() - 0.02, X[:,1].max() + 0.02
+    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 400), np.linspace(y_min, y_max, 400))
+    grid = np.c_[xx.ravel(), yy.ravel()]
+    probs = predict_proba_gda(model, grid).reshape(xx.shape)
+    plt.figure(figsize=(8,6))
+    # 決策邊界 p=0.5
+    plt.contour(xx, yy, probs, levels=[0.5], linewidths=2, linestyles='solid')
+    plt.scatter(X[:,0], X[:,1], c=y, s=12, edgecolors='k', linewidth=0.2)
+    plt.xlabel("longitude")
+    plt.ylabel("latitude")
+    plt.title(f"GDA decision boundary (test acc={acc_test:.4f})")
+    plt.savefig(filename, dpi=150, bbox_inches="tight")
+    plt.show()
+    return filename
+
+plot_path = plot_decision_boundary_2d(model, X_test, y_test)
+print("Decision boundary saved to:", plot_path)
+
+# -------- 7. 額外輸出模型參數（供報告附錄） --------
+np.savez("/content/gda_outputs/gda_model_params.npz",
+         phi=model["phi"], mu0=model["mu0"], mu1=model["mu1"],
+         sigma=model["sigma"], w=model["w"], b=model["b"])
+print("Model parameters saved to /content/gda_outputs/gda_model_params.npz")
