@@ -1,0 +1,81 @@
+(get the code by dicussing with ChatGPT)
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+
+# === 1. 讀取資料 ===
+data = pd.read_csv("regression_dataset.csv")
+X = data.iloc[:, :2].values   # 經度、緯度
+y = data.iloc[:, 2].values    # 溫度
+
+# === 2. 建立 QDA 分類模型 ===
+class QDA:
+    def __init__(self):
+        self.means = {}
+        self.covs = {}
+        self.priors = {}
+    
+    def fit(self, X, y):
+        self.classes = np.unique(y)
+        for c in self.classes:
+            X_c = X[y == c]
+            self.means[c] = np.mean(X_c, axis=0)
+            self.covs[c] = np.cov(X_c.T)
+            self.priors[c] = len(X_c) / len(X)
+    
+    def _discriminant(self, X, c):
+        mu = self.means[c]
+        Sigma = self.covs[c]
+        det = np.linalg.det(Sigma)
+        inv = np.linalg.inv(Sigma)
+        term1 = -0.5 * np.log(det)
+        diff = X - mu
+        term2 = -0.5 * np.sum(diff @ inv * diff, axis=1)
+        term3 = np.log(self.priors[c])
+        return term1 + term2 + term3
+    
+    def predict(self, X):
+        scores = np.array([self._discriminant(X, c) for c in self.classes])
+        return np.argmax(scores, axis=0)
+
+# === 3. 建立模擬分類標籤 (依據溫度分成兩群，高溫區與低溫區) ===
+threshold = np.median(y)
+y_class = (y > threshold).astype(int)
+
+qda = QDA()
+qda.fit(X, y_class)
+
+# === 4. 建立回歸模型 R(x) (僅在分類為1的區域上訓練) ===
+X_reg = X[y_class == 1]
+y_reg = y[y_class == 1]
+reg = LinearRegression()
+reg.fit(X_reg, y_reg)
+
+# === 5. 定義組合模型 h(x) ===
+def h(x):
+    c_pred = qda.predict(x)
+    y_pred = np.zeros(len(x))
+    y_pred[c_pred == 1] = reg.predict(x[c_pred == 1])
+    y_pred[c_pred == 0] = -999
+    return y_pred, c_pred
+
+# === 6. 建立決策邊界網格 ===
+x_min, x_max = X[:, 0].min() - 0.2, X[:, 0].max() + 0.2
+y_min, y_max = X[:, 1].min() - 0.2, X[:, 1].max() + 0.2
+xx, yy = np.meshgrid(np.linspace(x_min, x_max, 300),
+                     np.linspace(y_min, y_max, 300))
+grid = np.c_[xx.ravel(), yy.ravel()]
+
+# === 7. 模型預測與邊界圖 ===
+y_pred, c_pred = h(grid)
+Z = c_pred.reshape(xx.shape)
+
+plt.figure(figsize=(9,7))
+plt.contourf(xx, yy, Z, cmap='coolwarm', alpha=0.25)
+sc = plt.scatter(X[:,0], X[:,1], c=y, cmap='viridis', s=25, alpha=0.7)
+plt.colorbar(sc, label='Temperature')
+plt.title("Combined QDA + Regression model (h(x))\nDecision Boundary and Data Points")
+plt.xlabel("Longitude")
+plt.ylabel("Latitude")
+plt.show()
