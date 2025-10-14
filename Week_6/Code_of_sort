@@ -1,0 +1,68 @@
+(construt by dicussing with ChatGPT)
+import xml.etree.ElementTree as ET
+import pandas as pd
+import numpy as np
+import re
+
+# === 1. 載入 XML 檔案 ===
+xml_file = "O-A0038-003.xml"   # 如果檔名不同，請改這裡
+tree = ET.parse(xml_file)
+root = tree.getroot()
+
+# === 2. 解析經緯度範圍 ===
+ns = {"cwa": "urn:cwa:gov:tw:cwacommon:0.1"}  # XML namespace
+geo = root.find(".//cwa:GeoInfo", ns)
+lon_min = float(geo.find("cwa:BottomLeftLongitude", ns).text)
+lat_min = float(geo.find("cwa:BottomLeftLatitude", ns).text)
+lon_max = float(geo.find("cwa:TopRightLongitude", ns).text)
+lat_max = float(geo.find("cwa:TopRightLatitude", ns).text)
+
+# 經緯度解析度 (依照描述固定 0.03°)
+lon_step, lat_step = 0.03, 0.03
+
+# 網格大小 (說明有 67 x 120)
+lon_count, lat_count = 67, 120
+
+# === 3. 取得 Content (格點數據) ===
+content = root.find(".//cwa:Resource/cwa:Content", ns).text.strip()
+
+# 用正則表達式抓所有浮點數 (含 E 科學記號)
+values_str = re.findall(r"[-+]?\d+\.\d+E[-+]\d+", content)
+values = [float(v) for v in values_str]
+
+# === 4. 檢查數據長度是否正確 ===
+expected_len = lon_count * lat_count
+if len(values) != expected_len:
+    print(f"⚠️ 警告：數據長度 {len(values)} 和 {expected_len} 不一致")
+
+# === 5. 建立 DataFrame，包含經緯度與溫度 ===
+data = []
+for i, val in enumerate(values):
+    row = i // lon_count
+    col = i % lon_count
+    lon = lon_min + col * lon_step
+    lat = lat_min + row * lat_step
+    data.append([lon, lat, val])
+
+df = pd.DataFrame(data, columns=["longitude", "latitude", "temperature"])
+
+# === 6. 清理無效值 -999.0 ===
+df.replace(-999.0, np.nan, inplace=True)
+
+# === 7. 建立兩個資料集 ===
+# (1) 分類：是否為有效溫度
+df_classification = df.copy()
+df_classification["is_valid"] = df_classification["temperature"].notna().astype(int)
+
+# (2) 回歸：僅保留有效數據
+df_regression = df.dropna(subset=["temperature"]).copy()
+
+# === 8. 輸出 CSV ===
+df_classification.to_csv("classification_dataset.csv", index=False)
+df_regression.to_csv("regression_dataset.csv", index=False)
+
+print("✅ 已完成！產生 classification_dataset.csv 和 regression_dataset.csv")
+print("分類資料集前 5 筆：")
+print(df_classification.head())
+print("\n回歸資料集前 5 筆：")
+print(df_regression.head())
